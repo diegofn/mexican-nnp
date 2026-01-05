@@ -5,15 +5,24 @@
   "description": "Mexican National Numbering Plan Webservice",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js"
+    "start": "node app.js",
+    "postinstall": "prisma generate"
   },
   "author": "Diego Fernando Nieto",
   "license": "MIT",
   "dependencies": {
+    "@prisma/adapter-pg": "^7.2.0",
+    "@prisma/client": "^7.2.0",
     "axios": "^1.13.2",
     "body-parser": "^1.20.0",
-    "dotenv": "^16.4.7",
+    "dotenv": "^16.6.1",
     "express": "^4.21.2",
-    "http": "^0.0.1-security"
+    "http": "^0.0.1-security",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "@types/pg": "^8.16.0",
+    "prisma": "^7.2.0"
   }
 }

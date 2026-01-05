@@ -1,3 +1,6 @@
+const PrismaClient = require('@prisma/client').PrismaClient;
+const PrismaPg = require ('@prisma/adapter-pg').PrismaPg;
+
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
@@ -29,7 +32,19 @@ router.post('/', async function(req, res){
         //
         // Return found row
         //
-        return res.status(200).json({ found: true, data: row.MODALIDAD || row['MODALIDAD'] });
+        return res.status(200).json({ found: true, data: row[0]?.modalidad || row?.MODALIDAD });
+    } catch (err) {
+        LOG.error('Lookup error:', err);
+        return res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
+//
+// Reload the NNP data from CSV file and save to the database if needed
+//
+router.post('/syncnnp', async function(req, res){
+    try {
+        return res.status(200).json({ result: await saveNNPToDatabase() });
     } catch (err) {
         LOG.error('Lookup error:', err);
         return res.status(500).json({ error: 'Internal Server Error' });
@@ -41,6 +56,8 @@ router.post('/', async function(req, res){
 //
 const NNP_CSV_PATH = path.join(__dirname, '..', 'public', process.env.MEXICAN_NNP_FILENAME || 'pnn_Publico_Latest.csv');
 let nnpRows = null;
+let prisma = null;
+let adapter = null;
 
 function parseCSVLine(line) {
     const result = [];
@@ -79,15 +96,54 @@ async function loadNNPFile() {
             return obj;
         });
 
+        return nnpRows;
+    } catch (err) {
+        LOG.error('Error loading NNP CSV:', err);
+        throw err;
+    }
+}
+
+async function saveNNPToDatabase() {
+    try {
         //
         // Sync the NNP data to the database
         //
-        if (process.env.SYNC_NNP_TO_DB === 'true') {
-            const { syncNNPToDB } = require('../services/nnpSync');
-            await syncNNPToDB(nnpRows);
-        }
+        if (process.env.NNP_TO_DB === 'true') {
+            if (!adapter) adapter = new PrismaPg({
+                connectionString: process.env.DATABASE_URL,
+            });
+            if (!prisma) prisma = new PrismaClient({ adapter });
+            if (!nnpRows) await loadNNPFile();
 
-        return nnpRows;
+            const data = nnpRows.map(r => ({
+                numeracion_inicial: r.NUMERACION_INICIAL || r['NUMERACION_INICIAL'] || '',
+                numeracion_final: r.NUMERACION_FINAL || r['NUMERACION_FINAL'] || '',
+                modalidad: r.MODALIDAD || r['MODALIDAD'] || null,
+                raw: r
+            }));
+
+            //
+            // If there is existing data, clear it first and load again
+            //
+            if (await prisma.MexicanNnp.count() > 0) {
+                await prisma.MexicanNnp.deleteMany({});
+
+                const chunkSize = 1000;
+                for (let i = 0; i < data.length; i += chunkSize) {
+                    const chunk = data.slice(i, i + chunkSize);
+                    await prisma.MexicanNnp.createMany({
+                    data: chunk,
+                    skipDuplicates: true
+                    });
+                }
+            }
+            LOG.log(`NNP data synchronized to database. Total records: ${await prisma.MexicanNnp.count()}`);
+            return true;        
+        }
+        else {
+            LOG.log('NNP_TO_DB is not true; skipping database synchronization.');
+            return false;
+        }
     } catch (err) {
         LOG.error('Error loading NNP CSV:', err);
         throw err;
@@ -104,26 +160,57 @@ async function findPhoneInNNP(phone) {
     const target = cleanNumber(phone);
     if (!target) return null;
 
-    //
-    // Look for the phone in the NNP ranges
-    //
-    for (const row of nnpRows) {
-        const startRaw = row.NUMERACION_INICIAL || row['NUMERACION_INICIAL'] || '';
-        const endRaw = row.NUMERACION_FINAL || row['NUMERACION_FINAL'] || '';
-        const start = startRaw;
-        const end = endRaw;
-        if (!start || !end) continue;
-        try {
-            const t = BigInt(target);
-            const s = BigInt(start);
-            const e = BigInt(end);
-            if (t >= s && t <= e) return row;
-        } catch (e) {
-            // Fallback to string compare when numbers are small
-            if (target.length === start.length && target >= start && target <= end) return row;
-        }
+    if (process.env.NNP_TO_DB === 'true') {
+        //
+        // Create a database connection and look for the phone there
+        //
+        if (!adapter) adapter = new PrismaPg({
+                connectionString: process.env.DATABASE_URL,
+            });
+        if (!prisma) prisma = new PrismaClient({ adapter });
+        const row = await prisma.MexicanNnp.findMany({
+            where: {
+                numeracion_inicial: {
+                    lte: target,
+                },
+                numeracion_final: {
+                    gt: target,
+                },
+            },
+            select: {
+                id: true,
+                numeracion_inicial: true,
+                numeracion_final: true,
+                modalidad: true,
+                raw: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+        });
+        return row;
     }
-    return null;
+    else {
+        //
+        // Look for the phone in the NNP ranges
+        //
+        for (const row of nnpRows) {
+            const startRaw = row.NUMERACION_INICIAL || row['NUMERACION_INICIAL'] || '';
+            const endRaw = row.NUMERACION_FINAL || row['NUMERACION_FINAL'] || '';
+            const start = startRaw;
+            const end = endRaw;
+            if (!start || !end) continue;
+            try {
+                const t = BigInt(target);
+                const s = BigInt(start);
+                const e = BigInt(end);
+                if (t >= s && t <= e) return row;
+            } catch (e) {
+                // Fallback to string compare when numbers are small
+                if (target.length === start.length && target >= start && target <= end) return row;
+            }
+        }
+        return null;
+    }
 }
 
 //
@@ -144,5 +231,6 @@ async function findPhoneInNNP(phone) {
 //
 router.loadNNPFile = loadNNPFile;
 router.findPhoneInNNP = findPhoneInNNP;
+router.saveNNPToDatabase = saveNNPToDatabase;
 
 module.exports = router;
