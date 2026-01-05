@@ -78,6 +78,15 @@ async function loadNNPFile() {
             headers.forEach((h, idx) => { obj[h] = (vals[idx] !== undefined) ? vals[idx] : ''; });
             return obj;
         });
+
+        //
+        // Sync the NNP data to the database
+        //
+        if (process.env.SYNC_NNP_TO_DB === 'true') {
+            const { syncNNPToDB } = require('../services/nnpSync');
+            await syncNNPToDB(nnpRows);
+        }
+
         return nnpRows;
     } catch (err) {
         LOG.error('Error loading NNP CSV:', err);
