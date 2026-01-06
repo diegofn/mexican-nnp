@@ -1,6 +1,6 @@
 const PrismaClient = require('@prisma/client').PrismaClient;
 const PrismaPg = require ('@prisma/adapter-pg').PrismaPg;
-
+        
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
@@ -125,17 +125,15 @@ async function saveNNPToDatabase() {
             //
             // If there is existing data, clear it first and load again
             //
-            if (await prisma.MexicanNnp.count() > 0) {
-                await prisma.MexicanNnp.deleteMany({});
+            await prisma.MexicanNnp.deleteMany({});
 
-                const chunkSize = 1000;
-                for (let i = 0; i < data.length; i += chunkSize) {
-                    const chunk = data.slice(i, i + chunkSize);
-                    await prisma.MexicanNnp.createMany({
-                    data: chunk,
-                    skipDuplicates: true
-                    });
-                }
+            const chunkSize = 1000;
+            for (let i = 0; i < data.length; i += chunkSize) {
+                const chunk = data.slice(i, i + chunkSize);
+                await prisma.MexicanNnp.createMany({
+                data: chunk,
+                skipDuplicates: true
+                });
             }
             LOG.log(`NNP data synchronized to database. Total records: ${await prisma.MexicanNnp.count()}`);
             return true;        
